@@ -3,7 +3,7 @@
 package graph
 
 import (
-	"app-graph/internal/domain/graph/model"
+	"backend-service/internal/infrastructure/api/graph/model"
 	"bytes"
 	"context"
 	"embed"

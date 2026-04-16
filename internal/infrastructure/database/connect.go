@@ -3,41 +3,40 @@ package database
 import (
 	"context"
 	"database/sql"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
 	_ "github.com/lib/pq"
 )
 
-var DB *sql.DB
-
+// ConnectPg opens a PostgreSQL connection, verifies reachability and configures
+// the connection pool. The caller is responsible for closing the returned *sql.DB.
 func ConnectPg(ctx context.Context) *sql.DB {
-
 	dataSource := os.Getenv("POSTGRES_URL")
 	if dataSource == "" {
-		panic("missing environment variable POSTGRES_URL")
+		panic("required environment variable POSTGRES_URL is not set")
 	}
 
 	db, err := sql.Open("postgres", dataSource)
 	if err != nil {
-		log.Fatal("Error connecting to the database: ", err)
+		slog.Error("failed to open database connection", "error", err)
+		os.Exit(1)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Connection pool tuning — adjust for production workloads.
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
-		log.Fatal("Error pinging database: ", err)
+	if err := db.PingContext(pingCtx); err != nil {
+		slog.Error("failed to reach database", "error", err)
+		os.Exit(1)
 	}
 
+	slog.Info("database connection established")
 	return db
-}
-
-func Close() {
-	if DB != nil {
-		if err := DB.Close(); err != nil {
-			log.Fatal("Error closing database: ", err)
-		}
-	}
 }

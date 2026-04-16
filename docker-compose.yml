@@ -1,8 +1,8 @@
 version: '3.9'
 
 services:
-  app-graph:
-    container_name:  app-graph
+  service:
+    container_name: backend-service
     build:
       context: .
       dockerfile: Dockerfile
@@ -10,4 +10,3 @@ services:
       - ${PORT}:${PORT}
     env_file:
       - .env
-    command: ["/app/ pp-graph"]

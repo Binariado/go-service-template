@@ -1,7 +1,7 @@
 package user
 
-import "app-graph/internal/domain/graph/model"
-
+// Repository defines the persistence contract for the user domain.
+// Implementations live in the infrastructure layer.
 type Repository interface {
-	FindByID(id string) (*model.User, error)
+	FindByID(id string) (*User, error)
 }

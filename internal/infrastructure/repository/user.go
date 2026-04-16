@@ -1,12 +1,11 @@
 package repository
 
 import (
-	"app-graph/internal/domain/graph/model"
+	"backend-service/internal/domain/user"
 	"database/sql"
 )
 
-// Implementation of repositories to process data in a database
-
+// SQLUserRepository implements user.Repository using PostgreSQL.
 type SQLUserRepository struct {
 	db *sql.DB
 }
@@ -15,14 +14,11 @@ func NewSQLUserRepository(db *sql.DB) *SQLUserRepository {
 	return &SQLUserRepository{db: db}
 }
 
-func (r *SQLUserRepository) FindByID(userID string) (*model.User, error) {
+func (r *SQLUserRepository) FindByID(userID string) (*user.User, error) {
+	// TODO: replace with a real SQL query
+	// Example: SELECT id, name FROM users WHERE id = $1
 	if userID == "1" {
-		var nameValue = "Name"
-		return &model.User{
-			ID:   "1",
-			Name: nameValue,
-		}, nil
-	} else {
-		return nil, nil
+		return &user.User{ID: "1", Name: "Template User"}, nil
 	}
+	return nil, nil
 }

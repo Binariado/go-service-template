@@ -1,14 +1,17 @@
-FROM golang:1.22
+# Stage 1 — build
+FROM golang:1.24 AS builder
 
-WORKDIR /app/app-graph
+WORKDIR /app
 COPY . .
+RUN go mod download
+RUN CGO_ENABLED=0 GOOS=linux go build -o service .
 
-RUN go build -o app-graph
+# Stage 2 — minimal runtime image
+FROM gcr.io/distroless/static:nonroot
 
-COPY . /app/app-graph
-
-RUN chmod a+x /app/app-graph
+WORKDIR /app
+COPY --from=builder /app/service .
 
 EXPOSE $PORT
 
-ENTRYPOINT ["go", "run", "/app/app-graph" ]
+ENTRYPOINT ["/app/service"]
