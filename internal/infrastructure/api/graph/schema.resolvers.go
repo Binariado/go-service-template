@@ -18,7 +18,7 @@ func (r *mutationResolver) CreateUser(ctx context.Context, input model.NewUser) 
 // UserByID is the resolver for the userById field.
 // Maps domain entity → GraphQL model so the domain stays free of transport concerns.
 func (r *queryResolver) UserByID(ctx context.Context, id string) (*model.User, error) {
-	domainUser, err := r.App.User.FindByID(ctx, id)
+	domainUser, err := r.App.GetUserByID.Execute(ctx, id)
 	if err != nil {
 		return nil, err
 	}

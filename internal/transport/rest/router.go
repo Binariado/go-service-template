@@ -13,7 +13,7 @@ func NewRouter(app *application.Application) *chi.Mux {
 	r := chi.NewRouter()
 
 	// Users
-	userHandler := handler.NewUserHandler(app.User)
+	userHandler := handler.NewUserHandler(app)
 	r.Get("/users/{id}", userHandler.GetByID)
 
 	return r

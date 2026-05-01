@@ -11,7 +11,7 @@ added without rewriting the foundation.
 - **REST** — versioned router (`/api/v1`), handlers, DTOs, JSON response helpers
 - **GraphQL** — optional adapter using `gqlgen`, wired through the application layer
 - **Health endpoints** — `/health` (liveness) and `/readiness` (DB ping)
-- **Application layer** — single composition root; transport layers never touch repositories directly
+- **Use cases** — application layer with explicit use case structs; transport never calls domain directly
 - **Clean domain** — domain entities have zero dependency on transport or ORMs
 - **Structured logs** — `log/slog` with request IDs on every call
 - **Production bootstrap** — HTTP timeouts, graceful shutdown (30 s), CORS, panic recovery
@@ -32,8 +32,10 @@ added without rewriting the foundation.
 │   │       ├── repository.go       # Repository interface (contract)
 │   │       └── service.go          # Business logic
 │   │
-│   ├── application/                # Composition root — wires repos + services
-│   │   └── app.go                  # application.New(db) → injected into transports
+│   ├── application/                # Composition root + use cases
+│   │   ├── app.go                  # application.New(db) → exposes use cases to transports
+│   │   └── usecase/
+│   │       └── get_user_by_id.go   # One file per use case
 │   │
 │   ├── infrastructure/             # Implementations of domain contracts
 │   │   ├── database/               # PostgreSQL connection + pool
@@ -59,8 +61,12 @@ added without rewriting the foundation.
 | `domain` | stdlib only | transport, infrastructure, ORMs |
 | `application` | domain, infrastructure | transport |
 | `infrastructure` | domain, stdlib, drivers | transport |
-| `transport` | application, dto | domain internals, infrastructure |
+| `transport` | application | domain internals, infrastructure |
 | `server.go` | all layers | nothing specific from domain internals |
+
+> **Key rule:** handlers receive `*application.Application` and call use cases via
+> `app.<UseCase>.Execute(...)`. They never import domain packages or call domain
+> services directly.
 
 ---
 
@@ -119,6 +125,8 @@ docker compose up --build
 
 ### Add a new domain
 
+Create the domain files:
+
 ```
 internal/domain/order/
     entity.go        # Order struct
@@ -127,33 +135,148 @@ internal/domain/order/
 internal/infrastructure/repository/order.go   # SQL implementation
 ```
 
-Register the new service in `internal/application/app.go`:
+Add a use case in `internal/application/usecase/`:
+
+```go
+// internal/application/usecase/create_order.go
+type CreateOrder struct {
+    orders *order.Service
+    users  *user.Service   // cross-domain orchestration belongs here
+}
+
+func NewCreateOrder(orders *order.Service, users *user.Service) *CreateOrder {
+    return &CreateOrder{orders: orders, users: users}
+}
+
+func (uc *CreateOrder) Execute(ctx context.Context, cmd CreateOrderCmd) error {
+    // orchestrate across domains without coupling them to each other
+}
+```
+
+Register everything in `internal/application/app.go`:
 
 ```go
 type Application struct {
-    User  *user.Service
-    Order *order.Service   // add here
+    GetUserByID *usecase.GetUserByID
+    CreateOrder *usecase.CreateOrder   // add here
 }
 
 func New(db *sql.DB) *Application {
+    userRepo  := repository.NewSQLUserRepository(db)
     orderRepo := repository.NewSQLOrderRepository(db)
+
+    userService  := user.NewUserService(userRepo)
+    orderService := order.NewOrderService(orderRepo)
+
     return &Application{
-        User:  user.NewUserService(repository.NewSQLUserRepository(db)),
-        Order: order.NewOrderService(orderRepo),
+        GetUserByID: usecase.NewGetUserByID(userService),
+        CreateOrder: usecase.NewCreateOrder(orderService, userService),
     }
 }
 ```
 
+---
+
 ### Add a REST handler
 
-1. Create `internal/transport/rest/handler/order.go`
-2. Register the route in `internal/transport/rest/router.go`:
+Create the handler and register the route:
 
 ```go
-orderHandler := handler.NewOrderHandler(app.Order)
-r.Get("/orders/{id}", orderHandler.GetByID)
-r.Post("/orders", orderHandler.Create)
+// internal/transport/rest/handler/order.go
+type OrderHandler struct {
+    app *application.Application
+}
+
+func NewOrderHandler(app *application.Application) *OrderHandler {
+    return &OrderHandler{app: app}
+}
+
+func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
+    // decode DTO → call use case → encode response
+    err := h.app.CreateOrder.Execute(r.Context(), cmd)
+    ...
+}
 ```
+
+Register the route in `internal/transport/rest/router.go`:
+
+```go
+orderHandler := handler.NewOrderHandler(app)
+r.Post("/orders", orderHandler.Create)
+r.Get("/orders/{id}", orderHandler.GetByID)
+```
+
+---
+
+### Scaling REST by domain (recommended as the service grows)
+
+When the number of domains grows, split `transport/rest/` into one sub-package
+per domain instead of keeping all handlers and DTOs in a flat folder:
+
+```
+internal/transport/rest/
+├── router.go
+├── response/
+│   └── json.go
+├── user/                        # ← domain sub-package
+│   ├── handler.go               # UserHandler
+│   └── dto.go                   # UserResponse, CreateUserRequest, ...
+└── order/                       # ← domain sub-package
+    ├── handler.go               # OrderHandler
+    └── dto.go                   # OrderResponse, CreateOrderRequest, ...
+```
+
+Each domain package registers its own routes. `router.go` only orchestrates:
+
+```go
+// internal/transport/rest/router.go
+func NewRouter(app *application.Application) *chi.Mux {
+    r := chi.NewRouter()
+
+    userHandler  := user.NewHandler(app)
+    orderHandler := order.NewHandler(app)
+
+    r.Get("/users/{id}", userHandler.GetByID)
+    r.Post("/orders",    orderHandler.Create)
+    r.Get("/orders/{id}", orderHandler.GetByID)
+
+    return r
+}
+```
+
+Handlers across all sub-packages follow the same rule: they receive
+`*application.Application` and call use cases — never domain services directly.
+
+---
+
+### Scaling use cases by domain (recommended as the service grows)
+
+When use cases multiply, group them into domain sub-packages under `application/`:
+
+```
+internal/application/
+├── app.go
+└── usecase/
+    ├── user/
+    │   ├── get_by_id.go
+    │   └── create_user.go
+    └── order/
+        ├── create_order.go
+        └── cancel_order.go
+```
+
+`app.go` stays the single composition root — it just imports from sub-packages:
+
+```go
+type Application struct {
+    GetUserByID *useruc.GetByID
+    CreateUser  *useruc.CreateUser
+    CreateOrder *orderuc.CreateOrder
+    CancelOrder *orderuc.CancelOrder
+}
+```
+
+---
 
 ### Add a GraphQL resolver
 
@@ -164,15 +287,15 @@ r.Post("/orders", orderHandler.Create)
 go run github.com/99designs/gqlgen generate
 ```
 
-3. Implement the resolver in `schema.resolvers.go` — map domain entity → GraphQL model:
+3. Implement the resolver in `schema.resolvers.go` — call the use case, map to GraphQL model:
 
 ```go
 func (r *queryResolver) OrderByID(ctx context.Context, id string) (*model.Order, error) {
-    domainOrder, err := r.App.Order.FindByID(ctx, id)
+    o, err := r.App.GetOrderByID.Execute(ctx, id)
     if err != nil {
         return nil, err
     }
-    return &model.Order{ID: domainOrder.ID}, nil  // explicit mapper
+    return &model.Order{ID: o.ID}, nil  // explicit mapper: domain entity → transport model
 }
 ```
 
@@ -235,10 +358,15 @@ docker compose down
 
 - **REST is first-class, GraphQL is optional.** A new service can be built using
   only REST without touching any GraphQL file.
+- **Transport receives `*application.Application`, nothing else.** Handlers call
+  `app.<UseCase>.Execute(...)` and never import domain or infrastructure packages.
+  This enforces the layer boundary at the compiler level.
+- **Use cases live in `application/usecase/`.** Single-domain operations start there.
+  When an operation needs to coordinate multiple domain services, the use case is
+  the right place — not the handler, and not a domain service that imports another.
+- **`application.New(db)` is the single composition root.** Adding a new dependency
+  means changing one file (`app.go`), not every handler.
 - **Domain has zero transport dependency.** Entities and service interfaces never
   import `model.User` (GraphQL) or REST DTOs. Mappers live in the transport layer.
-- **`application.New(db)` is the single composition root.** Transport layers receive
-  the `Application` struct and nothing else. Adding a new dependency means changing
-  one file (`app.go`), not every handler.
 - **Infrastructure specifics stay out of the template.** No Firebase, no specific
   auth provider, no business-specific middleware. Only reusable platform patterns.
