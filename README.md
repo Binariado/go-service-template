@@ -251,3 +251,9 @@ make tidy        # go mod tidy
 - **`application.New(db)` is the single composition root.** Each module wires its use cases in its own `app.go`.
 - **Domain has zero transport dependency.** Mappers (entity → DTO / GraphQL model) live in the transport layer.
 - **Nothing vendor- or business-specific.** No auth provider, no specific middleware; only reusable platform patterns.
+
+---
+
+## License
+
+[MIT](LICENSE) © 2026 Brayan Salgado. When you start a project from this template, replace the copyright holder (or the license) with your own.
