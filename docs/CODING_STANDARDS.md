@@ -56,3 +56,22 @@ graph       "github.com/binariado/go-service-template/internal/transport/graphql
 - Unit tests live next to the code (`*_test.go`). Fake repositories implement the domain `Repository` interface.
 - Integration tests against PostgreSQL are named `*_integration_test.go` and should skip when `POSTGRES_URL` is not set.
 - Run `make test` and `make vet` before finishing any change.
+
+## Commits
+
+Follow [Conventional Commits](https://www.conventionalcommits.org): `<type>(<optional scope>): <description>`.
+
+- Write the description in English, imperative mood, lowercase, no trailing period (`feat(user): add create endpoint`).
+- One logical change per commit; keep the repository building and tests passing at every commit.
+- Mark breaking changes with `!` (`refactor!: rename module`) and explain them in the body.
+
+| Type | Use for |
+|---|---|
+| `feat` | A new feature |
+| `fix` | A bug fix |
+| `refactor` | Code change that neither fixes a bug nor adds a feature |
+| `test` | Adding or fixing tests |
+| `docs` | Documentation, README, ADRs, license |
+| `build` | Makefile, Dockerfile, dependencies |
+| `ci` | CI workflows and lint configuration |
+| `chore` | Maintenance that does not fit elsewhere |
