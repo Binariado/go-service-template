@@ -21,6 +21,7 @@ Hard rules:
 - One use case = one file = one `Execute(ctx, ...)`.
 - Dependencies are injected through constructors; `application.New(db)` is the composition root.
 - Never call `os.Getenv` outside `config/`.
+- Commit messages follow Conventional Commits (`feat:`, `fix:`, `docs:`, ...); see [docs/CODING_STANDARDS.md](docs/CODING_STANDARDS.md#commits).
 
 ## Adding a feature (in order)
 
@@ -52,7 +53,7 @@ Run `make vet` and `make test` before considering work complete.
 | File | Content |
 |---|---|
 | `docs/ARCHITECTURE.md` | Tree, layer rules, request flow |
-| `docs/CODING_STANDARDS.md` | Naming, aliases, rules, error mapping |
+| `docs/CODING_STANDARDS.md` | Naming, aliases, rules, error mapping, commit conventions |
 | `docs/DATABASE.md` | Migrations, sqlc, transactions |
 | `docs/API_GUIDELINES.md` | Routes, responses, pagination |
 | `docs/AUTH_JWT.md` | Example JWT authentication |
