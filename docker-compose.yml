@@ -1,12 +1,36 @@
-version: '3.9'
-
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: backend-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mydb
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mydb"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   service:
     container_name: backend-service
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - ${PORT}:${PORT}
+      - "${PORT}:${PORT}"
     env_file:
       - .env
+    environment:
+      # Overrides the host-oriented value from .env so the container reaches the db service.
+      POSTGRES_URL: postgres://postgres:postgres@db:5432/mydb?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:
