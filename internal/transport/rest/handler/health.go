@@ -1,9 +1,10 @@
 package handler
 
 import (
-	"backend-service/internal/transport/rest/response"
 	"database/sql"
 	"net/http"
+
+	"github.com/binariado/go-service-template/internal/transport/rest/response"
 )
 
 // Health handles GET /health — always returns 200 if the process is alive.

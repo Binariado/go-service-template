@@ -1,4 +1,4 @@
-package database
+package pg
 
 import (
 	"context"
@@ -10,14 +10,9 @@ import (
 	_ "github.com/lib/pq"
 )
 
-// ConnectPg opens a PostgreSQL connection, verifies reachability and configures
+// Connect opens a PostgreSQL connection, verifies reachability and configures
 // the connection pool. The caller is responsible for closing the returned *sql.DB.
-func ConnectPg(ctx context.Context) *sql.DB {
-	dataSource := os.Getenv("POSTGRES_URL")
-	if dataSource == "" {
-		panic("required environment variable POSTGRES_URL is not set")
-	}
-
+func Connect(ctx context.Context, dataSource string) *sql.DB {
 	db, err := sql.Open("postgres", dataSource)
 	if err != nil {
 		slog.Error("failed to open database connection", "error", err)

@@ -1,6 +1,6 @@
 package graph
 
-import "backend-service/internal/application"
+import "github.com/binariado/go-service-template/internal/application"
 
 // This file will not be regenerated automatically.
 //
