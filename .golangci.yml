@@ -1,0 +1,26 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - misspell
+    - unconvert
+  exclusions:
+    paths:
+      - internal/infrastructure/database/pg/sqlc
+      - internal/transport/graphql/generated.go
+      - internal/transport/graphql/model/models_gen.go
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/binariado/go-service-template
