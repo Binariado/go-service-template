@@ -1,22 +1,24 @@
 # Backend Service Template · Go
 
 A general-purpose Go backend template for building production-ready services.
-REST is first-class. GraphQL is an optional adapter. Workers and webhooks can be
-added without rewriting the foundation.
+REST is first-class. GraphQL is an optional adapter. Authentication, background
+jobs and other concerns are documented, so you add only what your service needs.
 
 ---
 
 ## What's included
 
-- **REST** — versioned router (`/api/v1`), handlers, DTOs, JSON response helpers
-- **GraphQL** — optional adapter using `gqlgen`, wired through the application layer
+- **REST** — versioned router (`/api/v1`), one package per module (router, handlers, DTOs), JSON response helpers
+- **GraphQL** — optional adapter (`transport/graphql`, gqlgen) wired through the application layer
 - **Health endpoints** — `/health` (liveness) and `/readiness` (DB ping)
-- **Use cases** — application layer with explicit use case structs; transport never calls domain directly
-- **Clean domain** — domain entities have zero dependency on transport or ORMs
-- **Structured logs** — `log/slog` with request IDs on every call
+- **Use cases** — one file per operation; transport never calls the domain directly
+- **Clean domain** — entities with zero dependency on transport or drivers
+- **PostgreSQL** — connection pool, **sqlc** typed queries and **golang-migrate** migrations (embedded in the binary, applied on startup)
+- **Auth contract** — `TokenValidator`, `AuthMiddleware`, `RequirePermission` (no implementation; JWT example in docs)
+- **Structured logs** — `log/slog`, request IDs on every call
 - **Production bootstrap** — HTTP timeouts, graceful shutdown (30 s), CORS, panic recovery
-- **PostgreSQL** — connection pool configured out of the box
-- **Docker** — multi-stage build with a minimal distroless runtime image
+- **Tooling** — Makefile, Docker (multi-stage, distroless) and Docker Compose with PostgreSQL
+- **Docs & standards** — architecture, coding standards, ADRs, review checklist, `AGENT.md`
 
 ---
 
@@ -24,34 +26,31 @@ added without rewriting the foundation.
 
 ```
 .
+├── cmd/api/main.go                 # Bootstrap: config → DB → migrations → app → router → server
 ├── config/                         # Environment-driven config (single source of truth)
+├── docs/                           # Architecture, standards, ADRs, guides
 ├── internal/
-│   ├── domain/                     # Business rules — no transport, no ORM imports
-│   │   └── user/
-│   │       ├── entity.go           # Domain entity
-│   │       ├── repository.go       # Repository interface (contract)
-│   │       └── service.go          # Business logic
-│   │
-│   ├── application/                # Composition root + use cases
-│   │   ├── app.go                  # application.New(db) → exposes use cases to transports
-│   │   └── usecase/
-│   │       └── get_user_by_id.go   # One file per use case
-│   │
-│   ├── infrastructure/             # Implementations of domain contracts
-│   │   ├── database/               # PostgreSQL connection + pool
-│   │   ├── repository/             # SQL implementations of domain repositories
-│   │   ├── middleware/             # HTTP middleware skeletons (auth, etc.)
-│   │   └── api/graph/              # gqlgen generated code + resolvers
-│   │       └── model/              # GraphQL transport models (generated)
-│   │
+│   ├── domain/<module>/            # entity.go, repository.go, service.go — no transport, no drivers
+│   ├── application/
+│   │   ├── app.go                  # application.New(db): top-level composition root
+│   │   ├── common/listing/         # Pagination / sort normalization
+│   │   └── <module>/
+│   │       ├── app.go              # Module composition root (lists its use cases)
+│   │       └── <verb>_<noun>.go    # One use case per file
+│   ├── infrastructure/
+│   │   ├── database/               # DB handle, transaction context
+│   │   │   └── pg/                 # connect.go, migrate.go, migrations/, queries/, sqlc/ (generated)
+│   │   └── repository/             # Repository implementations (the only code that runs SQL)
 │   └── transport/
-│       └── rest/                   # REST transport (first-class)
-│           ├── router.go           # Versioned router mounted at /api/v1
-│           ├── handler/            # HTTP handlers (one file per domain)
-│           ├── dto/                # Request / response structs
-│           └── response/           # JSON helpers: JSON, NotFound, BadRequest, InternalError
-│
-└── server.go                       # Bootstrap: config → DB → app → router → HTTP server
+│       ├── rest/
+│       │   ├── router.go           # Mounts every module at /api/v1
+│       │   ├── handler/            # Health / readiness
+│       │   ├── middleware/         # Auth / authorization contract
+│       │   ├── response/           # JSON, NotFound, BadRequest, Unauthorized, Forbidden, ...
+│       │   └── <module>/           # router.go, handler/, dto/
+│       └── graphql/                # Optional gqlgen adapter (schema, resolvers, generated code)
+├── gqlgen.yml · sqlc.yaml · Makefile · Dockerfile · docker-compose.yml
+└── AGENT.md
 ```
 
 ### Layer rules
@@ -59,14 +58,15 @@ added without rewriting the foundation.
 | Layer | Allowed imports | Forbidden imports |
 |---|---|---|
 | `domain` | stdlib only | transport, infrastructure, ORMs |
-| `application` | domain, infrastructure | transport |
+| `application` | domain, infrastructure (composition root) | transport |
 | `infrastructure` | domain, stdlib, drivers | transport |
-| `transport` | application | domain internals, infrastructure |
-| `server.go` | all layers | nothing specific from domain internals |
+| `transport` | application | domain services, infrastructure |
+| `cmd/*` | all layers | — |
 
 > **Key rule:** handlers receive `*application.Application` and call use cases via
-> `app.<UseCase>.Execute(...)`. They never import domain packages or call domain
-> services directly.
+> `app.<Module>.<UseCase>.Execute(...)`. They never call domain services or repositories.
+
+More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/CODING_STANDARDS.md](docs/CODING_STANDARDS.md).
 
 ---
 
@@ -78,34 +78,35 @@ added without rewriting the foundation.
 git clone <this-repo> my-service
 cd my-service
 
-# Replace the module name everywhere
-find . -type f -name "*.go" | xargs sed -i '' 's|backend-service|github.com/your-org/my-service|g'
-sed -i '' 's|backend-service|github.com/your-org/my-service|g' go.mod
+make rename MODULE=github.com/your-org/my-service
 ```
+
+This replaces the module path in Go files, `go.mod`, YAML, Markdown and the Dockerfile, then runs `go mod tidy`. After renaming you may remove the `rename` target from the `Makefile`. Also rename the `container_name`s in `docker-compose.yml` if you wish.
 
 ### 2. Configure environment
 
 ```bash
-cp .env.example .env   # or create .env manually
+cp .env.example .env
 ```
 
-Required variables:
-
-| Variable | Description | Example |
-|---|---|---|
-| `PORT` | Port the HTTP server listens on | `3000` |
-| `POSTGRES_URL` | PostgreSQL connection string | `postgres://user:pass@localhost:5432/mydb?sslmode=disable` |
-| `ORIGIN_ALLOWED` | Comma-separated allowed CORS origins | `http://localhost:3000,https://myapp.com` |
+| Variable | Required | Description | Example |
+|---|---|---|---|
+| `PORT` | yes | HTTP port | `3000` |
+| `POSTGRES_URL` | yes | PostgreSQL connection string | `postgres://postgres:postgres@localhost:5432/mydb?sslmode=disable` |
+| `ORIGIN_ALLOWED` | no | Comma-separated CORS origins | `http://localhost:3000,https://myapp.com` |
+| `GRAPHQL_PLAYGROUND_ENABLED` | no | Serve the GraphQL playground at `/` (default `false`) | `true` |
 
 ### 3. Run
 
 ```bash
-# Development
-go run server.go
-
-# With Docker / Podman
+# With Docker (API + PostgreSQL)
 docker compose up --build
+
+# Or locally (needs a reachable PostgreSQL)
+make run
 ```
+
+Migrations are applied on startup. Generated sqlc code is not committed: `make run|build|test|vet` and the Dockerfile generate it for you (`make sqlc`).
 
 ---
 
@@ -113,260 +114,140 @@ docker compose up --build
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/health` | Liveness — returns 200 if the process is alive |
-| `GET` | `/readiness` | Readiness — returns 200 only if the DB is reachable |
-| `GET` | `/api/v1/users/:id` | Example REST endpoint |
-| `POST` | `/query` | GraphQL endpoint |
-| `GET` | `/` | GraphQL Playground (development only) |
+| `GET` | `/health` | Liveness — 200 if the process is alive |
+| `GET` | `/readiness` | Readiness — 200 only if the DB is reachable |
+| `GET` | `/api/v1/users/{id}` | Example REST endpoint (`id` is a UUID) |
+| `POST` | `/api/v1/users` | Example write endpoint, body `{"name": "Ada"}` → 201 |
+| `POST` | `/query` | GraphQL endpoint (`userById` query, `createUser` mutation) |
+| `GET` | `/` | GraphQL playground (only with `GRAPHQL_PLAYGROUND_ENABLED=true`) |
+
+Try it:
+
+```bash
+psql "$POSTGRES_URL" -c "INSERT INTO users (name) VALUES ('Ada') RETURNING id"
+curl localhost:3000/api/v1/users/<id>
+```
 
 ---
 
 ## How to extend the template
 
-### Add a new domain
+Follow this order (also in [AGENT.md](AGENT.md)):
 
-Create the domain files:
-
-```
-internal/domain/order/
-    entity.go        # Order struct
-    repository.go    # Repository interface
-    service.go       # Business logic
-internal/infrastructure/repository/order.go   # SQL implementation
-```
-
-Add a use case in `internal/application/usecase/`:
+1. **Migration** — `internal/infrastructure/database/pg/migrations/000002_create_orders_table.{up,down}.sql`
+2. **Query** — `internal/infrastructure/database/pg/queries/order.sql`, then `make sqlc`
+3. **Domain** — `internal/domain/order/{entity,repository,service}.go`
+4. **Repository** — `internal/infrastructure/repository/order.go`
+5. **Use case** — `internal/application/order/create_order.go`
 
 ```go
-// internal/application/usecase/create_order.go
-type CreateOrder struct {
-    orders *order.Service
-    users  *user.Service   // cross-domain orchestration belongs here
+type CreateOrderUseCase struct {
+    orders *domainorder.Service
+    users  *domainuser.Service // cross-domain orchestration belongs here
 }
 
-func NewCreateOrder(orders *order.Service, users *user.Service) *CreateOrder {
-    return &CreateOrder{orders: orders, users: users}
-}
+func NewCreateOrderUseCase(orders *domainorder.Service, users *domainuser.Service) *CreateOrderUseCase { ... }
 
-func (uc *CreateOrder) Execute(ctx context.Context, cmd CreateOrderCmd) error {
-    // orchestrate across domains without coupling them to each other
-}
+func (uc *CreateOrderUseCase) Execute(ctx context.Context, req CreateOrderRequest) (*domainorder.Order, error) { ... }
 ```
 
-Register everything in `internal/application/app.go`:
+6. **Module app + root wiring**
 
 ```go
+// internal/application/order/app.go
+type App struct{ CreateOrder *CreateOrderUseCase }
+
+func NewApp(orders *domainorder.Service, users *domainuser.Service) *App {
+    return &App{CreateOrder: NewCreateOrderUseCase(orders, users)}
+}
+
+// internal/application/app.go
 type Application struct {
-    GetUserByID *usecase.GetUserByID
-    CreateOrder *usecase.CreateOrder   // add here
+    User  *user.App
+    Order *order.App
 }
-
-func New(db *sql.DB) *Application {
-    userRepo  := repository.NewSQLUserRepository(db)
-    orderRepo := repository.NewSQLOrderRepository(db)
-
-    userService  := user.NewUserService(userRepo)
-    orderService := order.NewOrderService(orderRepo)
-
-    return &Application{
-        GetUserByID: usecase.NewGetUserByID(userService),
-        CreateOrder: usecase.NewCreateOrder(orderService, userService),
-    }
-}
+// in New(db): orderRepo := repository.NewSQLOrderRepository(db.Postgres) ... Order: order.NewApp(orderSvc, userSvc)
 ```
 
----
-
-### Add a REST handler
-
-Create the handler and register the route:
+7. **REST module** — `internal/transport/rest/order/{router.go,handler/,dto/}`
 
 ```go
-// internal/transport/rest/handler/order.go
-type OrderHandler struct {
-    app *application.Application
+// internal/transport/rest/order/router.go
+func RegisterRoutes(r chi.Router, app *application.Application) {
+    h := orderhandler.NewOrderHandler(app)
+    r.Post("/orders", h.Create)
+    r.Get("/orders/{id}", h.GetByID)
 }
 
-func NewOrderHandler(app *application.Application) *OrderHandler {
-    return &OrderHandler{app: app}
-}
-
-func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
-    // decode DTO → call use case → encode response
-    err := h.app.CreateOrder.Execute(r.Context(), cmd)
-    ...
-}
-```
-
-Register the route in `internal/transport/rest/router.go`:
-
-```go
-orderHandler := handler.NewOrderHandler(app)
-r.Post("/orders", orderHandler.Create)
-r.Get("/orders/{id}", orderHandler.GetByID)
-```
-
----
-
-### Scaling REST by domain (recommended as the service grows)
-
-When the number of domains grows, split `transport/rest/` into one sub-package
-per domain instead of keeping all handlers and DTOs in a flat folder:
-
-```
-internal/transport/rest/
-├── router.go
-├── response/
-│   └── json.go
-├── user/                        # ← domain sub-package
-│   ├── handler.go               # UserHandler
-│   └── dto.go                   # UserResponse, CreateUserRequest, ...
-└── order/                       # ← domain sub-package
-    ├── handler.go               # OrderHandler
-    └── dto.go                   # OrderResponse, CreateOrderRequest, ...
-```
-
-Each domain package registers its own routes. `router.go` only orchestrates:
-
-```go
 // internal/transport/rest/router.go
-func NewRouter(app *application.Application) *chi.Mux {
-    r := chi.NewRouter()
-
-    userHandler  := user.NewHandler(app)
-    orderHandler := order.NewHandler(app)
-
-    r.Get("/users/{id}", userHandler.GetByID)
-    r.Post("/orders",    orderHandler.Create)
-    r.Get("/orders/{id}", orderHandler.GetByID)
-
-    return r
-}
+user.RegisterRoutes(r, app)
+order.RegisterRoutes(r, app)
 ```
 
-Handlers across all sub-packages follow the same rule: they receive
-`*application.Application` and call use cases — never domain services directly.
+8. **GraphQL (optional)** — edit `internal/transport/graphql/schema.graphqls`, run `make gqlgen`, then implement the resolver by calling the use case and mapping the entity to the GraphQL model.
 
----
+### Protecting routes
 
-### Scaling use cases by domain (recommended as the service grows)
+The template ships only the contract. Implement `middleware.TokenValidator` with the mechanism you prefer and use `AuthMiddleware` / `RequirePermission` — see [docs/AUTH_JWT.md](docs/AUTH_JWT.md).
 
-When use cases multiply, group them into domain sub-packages under `application/`:
+### Removing GraphQL
 
-```
-internal/application/
-├── app.go
-└── usecase/
-    ├── user/
-    │   ├── get_by_id.go
-    │   └── create_user.go
-    └── order/
-        ├── create_order.go
-        └── cancel_order.go
-```
+Delete `internal/transport/graphql/` and `gqlgen.yml`, remove the `graph.RegisterRoutes(...)` line and its import from `cmd/api/main.go`, drop the `gqlgen` target from the Makefile, and run `go mod tidy`.
 
-`app.go` stays the single composition root — it just imports from sub-packages:
+### Background jobs
 
-```go
-type Application struct {
-    GetUserByID *useruc.GetByID
-    CreateUser  *useruc.CreateUser
-    CreateOrder *orderuc.CreateOrder
-    CancelOrder *orderuc.CancelOrder
-}
-```
-
----
-
-### Add a GraphQL resolver
-
-1. Update `internal/infrastructure/api/graph/schema.graphqls`
-2. Regenerate:
-
-```bash
-go run github.com/99designs/gqlgen generate
-```
-
-3. Implement the resolver in `schema.resolvers.go` — call the use case, map to GraphQL model:
-
-```go
-func (r *queryResolver) OrderByID(ctx context.Context, id string) (*model.Order, error) {
-    o, err := r.App.GetOrderByID.Execute(ctx, id)
-    if err != nil {
-        return nil, err
-    }
-    return &model.Order{ID: o.ID}, nil  // explicit mapper: domain entity → transport model
-}
-```
+Not included. See [docs/JOBS.md](docs/JOBS.md) for a suggested Asynq + Valkey setup.
 
 ---
 
 ## Infrastructure
 
-### PostgreSQL connection pool
-
-Configured in `internal/infrastructure/database/connect.go`:
-
-```
-MaxOpenConns:    25
-MaxIdleConns:     5
-ConnMaxLifetime:  5 min
-```
-
-Adjust these values based on your workload and database plan.
-
-### HTTP timeouts
-
-Configured in `server.go`:
-
-```
-ReadTimeout:   15 s
-WriteTimeout:  15 s
-IdleTimeout:   60 s
-```
-
-### Graceful shutdown
-
-The server listens for `SIGINT` / `SIGTERM` and gives in-flight requests up to
-30 seconds to complete before exiting.
+- **PostgreSQL pool** (`pg/connect.go`): `MaxOpenConns 25`, `MaxIdleConns 5`, `ConnMaxLifetime 5 min`.
+- **HTTP timeouts** (`cmd/api/main.go`): `ReadTimeout 15 s`, `WriteTimeout 15 s`, `IdleTimeout 60 s`.
+- **Graceful shutdown**: `SIGINT` / `SIGTERM` give in-flight requests up to 30 s.
+- **Migrations**: embedded SQL, applied on startup — see [docs/DATABASE.md](docs/DATABASE.md).
 
 ---
 
 ## Commands
 
 ```bash
-# Run the service
-go run server.go
-
-# Tidy dependencies
-go mod tidy
-
-# Regenerate GraphQL code after schema changes
-go run github.com/99designs/gqlgen generate
-
-# Build binary
-go build -o service .
-
-# Docker
-docker compose up --build
-docker compose down
+make help        # list targets
+make run         # generate sqlc + run the API
+make build       # generate sqlc + build ./service
+make test        # generate sqlc + go test ./...
+make vet         # generate sqlc + go vet ./...
+make lint        # golangci-lint
+make sqlc        # regenerate typed queries
+make gqlgen      # regenerate GraphQL code
+make compose-up  # Docker Compose (API + PostgreSQL)
+make tidy        # go mod tidy
 ```
+
+---
+
+## Documentation
+
+| File | Content |
+|---|---|
+| [AGENT.md](AGENT.md) | Rules and workflow for AI agents / contributors |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Tree, layer rules, request flow |
+| [docs/CODING_STANDARDS.md](docs/CODING_STANDARDS.md) | Naming, aliases, error mapping, tests |
+| [docs/DATABASE.md](docs/DATABASE.md) | Migrations, sqlc, transactions |
+| [docs/API_GUIDELINES.md](docs/API_GUIDELINES.md) | Routes, responses, pagination |
+| [docs/AUTH_JWT.md](docs/AUTH_JWT.md) | Example JWT authentication |
+| [docs/JOBS.md](docs/JOBS.md) | Example background jobs |
+| [docs/REVIEW_CHECKLIST.md](docs/REVIEW_CHECKLIST.md) | PR checklist |
+| [docs/adr/](docs/adr/) | Architecture decision records |
 
 ---
 
 ## Design decisions
 
-- **REST is first-class, GraphQL is optional.** A new service can be built using
-  only REST without touching any GraphQL file.
-- **Transport receives `*application.Application`, nothing else.** Handlers call
-  `app.<UseCase>.Execute(...)` and never import domain or infrastructure packages.
-  This enforces the layer boundary at the compiler level.
-- **Use cases live in `application/usecase/`.** Single-domain operations start there.
-  When an operation needs to coordinate multiple domain services, the use case is
-  the right place — not the handler, and not a domain service that imports another.
-- **`application.New(db)` is the single composition root.** Adding a new dependency
-  means changing one file (`app.go`), not every handler.
-- **Domain has zero transport dependency.** Entities and service interfaces never
-  import `model.User` (GraphQL) or REST DTOs. Mappers live in the transport layer.
-- **Infrastructure specifics stay out of the template.** No Firebase, no specific
-  auth provider, no business-specific middleware. Only reusable platform patterns.
+- **REST is first-class, GraphQL is optional.** A service can use only REST without touching any GraphQL file.
+- **Transport receives `*application.Application`, nothing else.** The layer boundary is enforced by the compiler.
+- **Layer-first, module-second.** Each domain is a module in every layer; adding one never modifies the others.
+- **One use case per file.** Cross-domain orchestration lives in use cases — not in handlers, and not in a domain service that imports another.
+- **`application.New(db)` is the single composition root.** Each module wires its use cases in its own `app.go`.
+- **Domain has zero transport dependency.** Mappers (entity → DTO / GraphQL model) live in the transport layer.
+- **Nothing vendor- or business-specific.** No auth provider, no specific middleware; only reusable platform patterns.
